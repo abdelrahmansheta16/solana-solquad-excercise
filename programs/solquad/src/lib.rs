@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-
 declare_id!("5sFUqUTjAMJARrEafMX8f4J1LagdUQ9Y8TR8HwGNHkU8");
 
 #[program]
@@ -27,6 +26,11 @@ pub mod solquad {
     pub fn initialize_project(ctx: Context<InitializeProject>, name: String) -> Result<()> {
         let project_account = &mut ctx.accounts.project_account;
 
+        // Check if the project is already associated with a pool
+        if project_account.associated_pool.is_some() {
+            return Err(Errors::ProjectAlreadyAssociated.into());
+        }
+
         project_account.project_owner = ctx.accounts.project_owner.key();
         project_account.project_name = name;
         project_account.votes_count = 0;
@@ -41,14 +45,26 @@ pub mod solquad {
         let pool_account = &mut ctx.accounts.pool_account;
         let project_account = &ctx.accounts.project_account;
 
-        pool_account.projects.push(
-            project_account.project_owner
-        );
+        // Check if the project is already in the pool
+        if pool_account
+            .projects
+            .iter()
+            .any(|&project| project == project_account.project_owner)
+        {
+            return Err(Errors::ProjectAlreadyAdded.into());
+        }
+
+        // Check if the project is already associated with a pool
+        if project_account.associated_pool.is_some() {
+            return Err(Errors::ProjectAlreadyAssociated.into());
+        }
+
+        pool_account.projects.push(project_account.project_owner);
         pool_account.total_projects += 1;
 
-        escrow_account.project_reciever_addresses.push(
-            project_account.project_owner
-        );
+        escrow_account
+            .project_reciever_addresses
+            .push(project_account.project_owner);
 
         Ok(())
     }
@@ -73,7 +89,7 @@ pub mod solquad {
         let escrow_account = &mut ctx.accounts.escrow_account;
         let pool_account = &mut ctx.accounts.pool_account;
         let project_account = &mut ctx.accounts.project_account;
-  
+
         for i in 0..escrow_account.project_reciever_addresses.len() {
             let distributable_amt: u64;
             let votes: u64;
@@ -85,8 +101,10 @@ pub mod solquad {
                 votes = 0;
             }
 
-            if votes != 0 {
-                distributable_amt = (votes / pool_account.total_votes) * escrow_account.creator_deposit_amount as u64;
+            if votes != 0 && pool_account.total_votes != 0 {
+                let ratio = (votes as f64) / (pool_account.total_votes as f64);
+                distributable_amt =
+                    (ratio * escrow_account.creator_deposit_amount as f64).round() as u64;
             } else {
                 distributable_amt = 0;
             }
@@ -185,7 +203,7 @@ pub struct Escrow {
     pub project_reciever_addresses: Vec<Pubkey>,
 }
 
-// Pool for each project 
+// Pool for each project
 #[account]
 pub struct Pool {
     pub pool_creator: Pubkey,
@@ -202,6 +220,7 @@ pub struct Project {
     pub votes_count: u64,
     pub voter_amount: u64,
     pub distributed_amt: u64,
+    pub associated_pool: Option<Pubkey>,
 }
 
 // Voters voting for the project
@@ -209,5 +228,13 @@ pub struct Project {
 pub struct Voter {
     pub voter: Pubkey,
     pub voted_for: Pubkey,
-    pub token_amount: u64
+    pub token_amount: u64,
+}
+
+#[error_code]
+pub enum Errors {
+    #[msg("Project is already added to the pool")]
+    ProjectAlreadyAdded,
+    #[msg("Project is already associated with a pool")]
+    ProjectAlreadyAssociated,
 }
